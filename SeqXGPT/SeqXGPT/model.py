@@ -99,8 +99,17 @@ class ModelWiseCNNClassifier(nn.Module):
 class ModelWiseTransformerClassifier(nn.Module):
 
     def __init__(self, id2labels, seq_len, intermediate_size = 512, num_layers=2, dropout_rate=0.1):
+        # 调用 父类（nn.Module）的 __init__ 方法
         super(ModelWiseTransformerClassifier, self).__init__()
         # feature_enc_layers = [(512, 10, 5)] + [(512, 3, 2)] * 4 + [(512,2,2)] + [(512,2,2)]
+        
+        # 五层卷积网络架构
+        # [(64, 5, 1)]
+        # 第一层卷积：输出通道数 64，卷积核大小 5，步幅（stride）1。
+        # [(128, 3, 1)] * 3
+        # 接着 重复 3 次的层：输出通道数 128，卷积核大小 3，步幅 1。也就是三层相同配置的卷积。
+        # [(64, 3, 1)]
+        # 最后一层卷积：输出通道数 64，卷积核大小 3，步幅 1。
         feature_enc_layers = [(64, 5, 1)] + [(128, 3, 1)] * 3 + [(64, 3, 1)]
         self.conv = ConvFeatureExtractionModel(
             conv_layers=feature_enc_layers,
@@ -142,15 +151,21 @@ class ModelWiseTransformerClassifier(nn.Module):
         return out
 
     def forward(self, x, labels):
+        # 判断 labels 中哪些元素 大于 -1，并返回一个同样 shape 的布尔张量 mask（由true 和 false 组成）
         mask = labels.gt(-1)
+        # 对 mask 进行按位取反（logical NOT），生成一个新的布尔张量 padding_mask
         padding_mask = ~mask
 
+        # print(f"ModelWiseTransformerClassifier: x.shape={x.shape}, labels.shape={labels.shape}, mask.shape={mask.shape}, padding_mask.shape={padding_mask.shape}")
+        # odelWiseTransformerClassifier: x.shape=torch.Size([32, 1024, 1]), labels.shape=torch.Size([32, 1024]), mask.shape=torch.Size([32, 1024]), padding_mask.shape=torch.Size([32, 1024])
+        # 对张量 x 在维度 1 和维度 2 之间交换位置（转置）
         x = x.transpose(1, 2)
         out1 = self.conv_feat_extract(x[:, 0:1, :])  
         out2 = self.conv_feat_extract(x[:, 1:2, :])  
         out3 = self.conv_feat_extract(x[:, 2:3, :])  
         out4 = self.conv_feat_extract(x[:, 3:4, :])  
         out = torch.cat((out1, out2, out3, out4), dim=2)  
+        # out = torch.cat((out3, out3,out4,out4), dim=2)  
         
         outputs = out + self.position_encoding.to(out.device)
         outputs = self.norm(outputs)
