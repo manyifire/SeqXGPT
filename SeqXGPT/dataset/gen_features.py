@@ -11,12 +11,11 @@ import numpy as np
 from sklearn.preprocessing import normalize
 from tqdm import tqdm
 
-
 def access_api(text, api_url, do_generate=False):
     """
 
     :param text: input text
-    :param api_url: api
+    :param api_url: api    
     :param do_generate: whether generate or not
     :return:
     """
@@ -28,10 +27,12 @@ def access_api(text, api_url, do_generate=False):
         prediction = client.post(api_url,
                                  data=msgpack.packb(post_data),
                                  timeout=None)
+    # print(prediction.status_code)
     if prediction.status_code == 200:
         content = msgpack.unpackb(prediction.content)
     else:
         content = None
+    # print(content)
     return content
 
 
@@ -40,20 +41,21 @@ def get_features(type, input_file, output_file):
     get [losses, begin_idx_list, ll_tokens_list, label_int, label] based on raw lines
     """
 
-    en_model_names = ['gpt_2', 'gpt_neo', 'gpt_J', 'llama']
-    cn_model_names = ['wenzhong', 'sky_text', 'damo', 'chatglm']
+    # en_model_names = ['gpt_2', 'gpt_neo', 'gpt_J', 'llama']
+    # cn_model_names = ['wenzhong', 'sky_text', 'damo', 'chatglm']
 
-    gpt_2_api = 'http://10.176.52.120:20098/inference'
-    gpt_neo_api = 'http://10.176.52.120:20097/inference'
-    gpt_J_api = 'http://10.176.52.120:20099/inference'
-    llama_api = 'http://10.176.52.120:20100/inference'
-    wenzhong_api = 'http://10.176.52.101:20160/inference'
-    sky_text_api = 'http://10.176.52.120:20102/inference'
-    damo_api = 'http://10.176.52.120:20101/inference'
-    chatglm_api = 'http://10.176.52.120:20103/inference'
+    gpt_2_api = 'http://127.0.0.1:20098/inference'
+    gpt_neo_api = 'http://127.0.0.1:20099/inference'
+    gpt_J_api = 'http://127.0.0.1:20100/inference'
+    llama_api = 'http://127.0.0.1:20101/inference'
+    # wenzhong_api = 'http://10.176.52.101:20160/inference'
+    # sky_text_api = 'http://10.176.52.120:20102/inference'
+    # damo_api = 'http://10.120.17.109:20101/inference'
+    # chatglm_api = 'http://10.176.52.120:20103/inference'
 
     en_model_apis = [gpt_2_api, gpt_neo_api, gpt_J_api, llama_api]
-    cn_model_apis = [wenzhong_api, sky_text_api, damo_api, chatglm_api]
+    # en_model_apis = [gpt_2_api, gpt_neo_api, gpt_J_api]
+    # cn_model_apis = [wenzhong_api, sky_text_api, damo_api, chatglm_api]
 
     en_labels = {
         'gpt2': 0,
@@ -67,16 +69,16 @@ def get_features(type, input_file, output_file):
         'dolly': None,
     }
 
-    cn_labels = {
-        'wenzhong': 0,
-        'sky_text': 1,
-        'damo': 2,
-        'chatglm': 3,
-        'gpt3re': 4,
-        'gpt3sum': 4,
-        'human': 5,
-        'moss': 6
-    }
+    # cn_labels = {
+    #     'wenzhong': 0,
+    #     'sky_text': 1,
+    #     'damo': 2,
+    #     'chatglm': 3,
+    #     'gpt3re': 4,
+    #     'gpt3sum': 4,
+    #     'human': 5,
+    #     'moss': 6
+    # }
 
     # line = {'text': '', 'label': ''}
     with open(input_file, 'r') as f:
@@ -86,9 +88,13 @@ def get_features(type, input_file, output_file):
     print('input file:{}, length:{}'.format(input_file, len(lines)))
 
     with open(output_file, 'w', encoding='utf-8') as f:
+        # 每个data分别过4个model
         for data in tqdm(lines):
-            line = data['text']
-            label = data['label']
+            # line = data['text']
+            # # print("line: {}".format(line))
+            # label = data['label']
+            line = data['hybrid_code']
+            label = 'llama'
 
             losses = []
             begin_idx_list = []
@@ -96,9 +102,9 @@ def get_features(type, input_file, output_file):
             if type == 'en':
                 model_apis = en_model_apis
                 label_dict = en_labels
-            elif type == 'cn':
-                model_apis = cn_model_apis
-                label_dict = cn_labels
+            # elif type == 'cn':
+            #     model_apis = cn_model_apis
+            #     label_dict = cn_labels
 
             label_int = label_dict[label]
 
@@ -106,8 +112,9 @@ def get_features(type, input_file, output_file):
             for api in model_apis:
                 try:
                     loss, begin_word_idx, ll_tokens = access_api(line, api)
+                    # print("loss: {}, begin_word_idx: {}, ll_tokens: {}".format(loss, begin_word_idx, ll_tokens))
                 except TypeError:
-                    print("return NoneType, probably gpu OOM, discard this sample")
+                    print(f"{api}: return NoneType, probably gpu OOM, discard this sample")
                     error_flag = True
                     break
                 losses.append(loss)
@@ -116,16 +123,21 @@ def get_features(type, input_file, output_file):
             # if oom, discard this sample
             if error_flag:
                 continue
-
+            
             result = {
                 'losses': losses,
                 'begin_idx_list': begin_idx_list,
                 'll_tokens_list': ll_tokens_list,
                 'label_int': label_int,
                 'label': label,
-                'text': line
+                'text': line,
+                'prompt_len': data['boundary_ix'],
+                'human_part': data['human_part'],
+                'machine_part': data['machine_part'],
+                'prompt_pattern': data['prompt_pattern'],
+                'labeled_statements': data['labeled_statements'],
             }
-
+            # print("result: {}".format(result))
             f.write(json.dumps(result, ensure_ascii=False) + '\n')
 
 
