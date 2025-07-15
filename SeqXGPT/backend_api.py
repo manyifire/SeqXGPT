@@ -59,7 +59,7 @@ if __name__ == "__main__":
     # --model: [damo, gpt2, gptj, gptneo, wenzhong, skywork, llama]
     # python backend_api.py --port 6006 --timeout 30000 --debug --model=damo --gpu=3
     args = parse_args()
-    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '6'
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
     if args.model == 't5':
         server = Server()
