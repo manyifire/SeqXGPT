@@ -9,9 +9,14 @@ from mosec import Worker
 from mosec.mixin import MsgpackMixin
 # llama
 from transformers import LlamaForCausalLM, LlamaTokenizer
-from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
+from transformers import BitsAndBytesConfig,AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode
 
+AUTH_TOKEN="x"
+    
+# import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0,2,6,7"
+# os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 class SnifferBaseModel(MsgpackMixin, Worker):
 
@@ -73,9 +78,9 @@ class SnifferGPT2Model(SnifferBaseModel):
         self.do_generate = None
         self.text = None
         self.base_tokenizer = transformers.AutoTokenizer.from_pretrained(
-            'gpt2-xl')
+            'gpt2-xl',resume_download=True)
         self.base_model = transformers.AutoModelForCausalLM.from_pretrained(
-            'gpt2-xl')
+            'gpt2-xl',low_cpu_mem_usage=True,resume_download=True)
         self.base_tokenizer.pad_token_id = self.base_tokenizer.eos_token_id
         self.base_model.to(self.device)
         byte_encoder = bytes_to_unicode()
@@ -96,9 +101,10 @@ class SnifferGPTNeoModel(SnifferBaseModel):
         self.do_generate = None
         self.text = None
         self.base_tokenizer = transformers.AutoTokenizer.from_pretrained(
-            'EleutherAI/gpt-neo-2.7B')
+            'EleutherAI/gpt-neo-2.7B',resume_download=True)
         self.base_model = transformers.AutoModelForCausalLM.from_pretrained(
-            'EleutherAI/gpt-neo-2.7B', device_map="auto", load_in_8bit=True)
+            'EleutherAI/gpt-neo-2.7B', device_map="auto", load_in_8bit=True,
+            low_cpu_mem_usage=True,resume_download=True)
         self.base_tokenizer.pad_token_id = self.base_tokenizer.eos_token_id
         byte_encoder = bytes_to_unicode()
         self.ppl_calculator = BBPETokenizerPPLCalc(byte_encoder,
@@ -145,13 +151,17 @@ class SnifferLlamaModel(SnifferBaseModel):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.do_generate = None
         self.text = None
-        model_path = ''
-        self.base_tokenizer = LlamaTokenizer.from_pretrained(model_path)
+        model_path ="meta-llama/Llama-2-7b-hf"
+        self.base_tokenizer = LlamaTokenizer.from_pretrained(model_path,use_fast=False,token=AUTH_TOKEN)
         self.base_tokenizer.pad_token_id = self.base_tokenizer.eos_token_id
         self.base_tokenizer.unk_token_id = self.base_tokenizer.unk_token_id
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True) #,llm_int8_enable_fp32_cpu_offload=True)  # Critical for large models)
         self.base_model = LlamaForCausalLM.from_pretrained(model_path,
                                                            device_map="auto",
-                                                           load_in_8bit=True)
+                                                           quantization_config=quantization_config,
+                                                           torch_dtype=torch.bfloat16,
+                                                           low_cpu_mem_usage=True,
+                                                           token=AUTH_TOKEN)
         self.ppl_calculator = SPLlamaTokenizerPPLCalc(self.base_model,
                                                       self.base_tokenizer,
                                                       self.device)
