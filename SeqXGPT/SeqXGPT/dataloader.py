@@ -13,6 +13,10 @@ from transformers import AutoTokenizer
 from torch.utils.data.dataloader import DataLoader, RandomSampler, SequentialSampler
 from sklearn.preprocessing import normalize
 
+import ast
+import re
+from typing import List, Dict
+
 
 def set_seed(seed):
     random.seed(seed)
@@ -141,6 +145,7 @@ class DataManager:
                           sampler=SequentialSampler(dataset),
                           collate_fn=self.data_collator)
     
+    # data collator for block-level classification
     def data_collator(self, samples):
         # samples: {'features': [], 'prompt_len': [], 'label': [], 'text': []}
         # batch: {'features': [], 'labels': [], 'text': []}
@@ -159,7 +164,7 @@ class DataManager:
         pad_masks = (1 - masks) * self.label_pad_idx
 
         for idx, data in enumerate(samples):
-            lines_with_nl = data['text'].splitlines(True)
+            lines_with_nl = self.split_code_into_blocks(data['text'])
             if data['prompt_pattern'] == "H_M":
                 # p_len = self.idx_after_x_newlines(data['text'], data['prompt_len'][0])
                 p_len = data['text'].find(data['human_part'][-1])+len(data['human_part'][-1])
@@ -356,6 +361,257 @@ class DataManager:
         batch['text'] = text
 
         return batch
+    
+
+    def split_code_into_blocks(self, text):
+        """
+        将代码文本按照空行分割成块，并保留所有换行符
+        
+        参数:
+            text (str): 输入的代码文本
+            
+        返回:
+            list: 包含代码块的列表，每个块保留原始换行符
+        """
+        lines = text.splitlines(True)  # 保留换行符分割为行
+        blocks = []  # 存储所有代码块
+        current_block = []  # 当前正在处理的代码块
+        
+        for line in lines:
+            # 检查是否是空行（只包含空白字符和换行符）
+            if line.strip() == '':
+                # 如果当前块不为空，则将其加入blocks并重置
+                if current_block:
+                    blocks.append(''.join(current_block))
+                    current_block = []
+                # 空行本身也作为一个单独的块或保留在后续处理中
+                current_block.append(line)
+            else:
+                # 非空行，添加到当前块
+                current_block.append(line)
+        
+        # 添加最后一个块
+        if current_block:
+            blocks.append(''.join(current_block))
+        
+        return blocks
+
+     
+    # def data_collator(self, samples):
+    #     # samples: {'features': [], 'prompt_len': [], 'label': [], 'text': []}
+    #     # batch: {'features': [], 'labels': [], 'text': []}
+    #     # labels是一个list，为每个token打上标记
+    #     batch = {}
+    #     #print(f'samples ------- {np.array(samples).shape}') # (32,)
+    #     features = [sample['features'] for sample in samples]
+    #     #print(type(features))
+        
+    #     prompt_len = [sample['prompt_len'] for sample in samples]
+    #     text = [sample['text'] for sample in samples]
+    #     label = [sample['label'] for sample in samples]
+
+    #     features, masks = self.process_and_convert_to_tensor(features)
+    #     # pad_masks = ~masks * -1
+    #     pad_masks = (1 - masks) * self.label_pad_idx
+
+    #     for idx, data in enumerate(samples):
+    #         lines_with_nl = data['text'].splitlines(True)
+    #         if data['prompt_pattern'] == "H_M":
+    #             # p_len = self.idx_after_x_newlines(data['text'], data['prompt_len'][0])
+    #             p_len = data['text'].find(data['human_part'][-1])+len(data['human_part'][-1])
+    #             prefix_len = len(self.split_sentence(data['text'][:p_len]))
+    #             if prefix_len > self.max_len:
+    #                 prefix_ids = self.sequence_labels_to_ids(self.max_len, self.human_label)
+    #                 masks[idx][:] = prefix_ids[:]
+    #                 continue
+    #             total_len = len(self.split_sentence(data['text']))
+                
+    #             if prefix_len > 0:
+    #                 prefix_ids = self.sequence_labels_to_ids(prefix_len, self.human_label)
+    #                 masks[idx][:prefix_len] = prefix_ids[:]
+    #             if total_len - prefix_len > 0:
+    #                 if total_len > self.max_len:
+    #                     # print(f'way 1 -------- {self.max_len - prefix_len}')
+    #                     human_ids = self.sequence_labels_to_ids(self.max_len - prefix_len, data['label'])
+    #                 else:
+    #                     # print(f'way 2 --------------{total_len - prefix_len}')
+    #                     human_ids = self.sequence_labels_to_ids(total_len - prefix_len, data['label'])
+                    
+    #                 # 把导致问题的样本信息都打印出来
+    #                 if human_ids is None:
+    #                     # 把导致问题的样本信息都打印出来
+    #                     print(f"[Error] human_ids is None at idx={idx}")
+    #                     print(f"  text sample: {data['text']!r}")
+    #                     print(f"  label[idx]: {data['label']!r}")
+    #                     print(f"  prefix_len={prefix_len}, total_len={total_len}")
+    #                     # 也可以直接抛异常，结束并定位
+    #                     raise ValueError(f"sequence_labels_to_ids returned None at sample {idx}")
+
+    #                 masks[idx][prefix_len:total_len] = human_ids[:]
+    #             masks[idx] += pad_masks[idx]
+
+    #         if data['prompt_pattern'] == "M_H":
+    #             first_x = lines_with_nl[:data['prompt_len'][0]]
+    #             # p_len =  len("".join(first_x))
+    #             p_len = data['text'].find(data['human_part'][0])
+    #             prefix_len = len(self.split_sentence(text[idx][:p_len]))
+    #             if prefix_len > self.max_len:
+    #                 prefix_ids = self.sequence_labels_to_ids(self.max_len, data['label'])
+    #                 masks[idx][:] = prefix_ids[:]
+    #                 continue
+    #             total_len = len(self.split_sentence(data['text']))
+                
+    #             if prefix_len > 0:
+    #                 prefix_ids = self.sequence_labels_to_ids(prefix_len, data['label'])
+    #                 masks[idx][:prefix_len] = prefix_ids[:]
+    #             if total_len - prefix_len > 0:
+    #                 if total_len > self.max_len:
+    #                     human_ids = self.sequence_labels_to_ids(self.max_len - prefix_len, self.human_label)
+    #                 else:
+    #                     human_ids = self.sequence_labels_to_ids(total_len - prefix_len, self.human_label)
+                    
+    #                 # 把导致问题的样本信息都打印出来
+    #                 if human_ids is None:
+    #                     # 把导致问题的样本信息都打印出来
+    #                     print(f"[Error] human_ids is None at idx={idx}")
+    #                     print(f"  text sample: {data['text']!r}")
+    #                     print(f"  label[idx]: {data['label']!r}")
+    #                     print(f"  prefix_len={prefix_len}, total_len={total_len}")
+    #                     # 也可以直接抛异常，结束并定位
+    #                     raise ValueError(f"sequence_labels_to_ids returned None at sample {idx}")
+
+    #                 masks[idx][prefix_len:total_len] = human_ids[:]
+    #             masks[idx] += pad_masks[idx]
+
+    #         if data['prompt_pattern'] == "H_M_H":
+    #             human1 = lines_with_nl[:data['prompt_len'][0]]
+    #             human2 = lines_with_nl[data['prompt_len'][1]:]
+    #             machine_len = lines_with_nl[data['prompt_len'][0]:data['prompt_len'][1]]
+    #             # human_len1 = len("".join(human1))
+    #             human_len1 = data['text'].find(data['machine_part'][0])+len(data['human_part'][-1])
+    #             # human_len2 = len("".join(human2))
+    #             human_len2 = len(data['text'])-data['text'].find(data['machine_part'][-1])
+    #             # machine_len = len("".join(machine_len))
+    #             machine_len = data['text'].find(data['machine_part'][0]) + len(data['machine_part'][0]) - human_len1
+    #             machine_len = len(self.split_sentence(data['text'][human_len1:human_len1+machine_len]))
+    #             human_len2 = len(self.split_sentence(data['text'][human_len1+machine_len:]))
+
+    #             prefix_len = len(self.split_sentence(data['text'][:human_len1]))
+    #             if prefix_len > self.max_len:
+    #                 prefix_ids = self.sequence_labels_to_ids(self.max_len, self.human_label)
+    #                 masks[idx][:] = prefix_ids[:]
+    #                 continue
+    #             total_len = len(self.split_sentence(data['text']))
+                
+    #             if prefix_len > 0:
+    #                 prefix_ids = self.sequence_labels_to_ids(prefix_len, self.human_label)
+    #                 masks[idx][:prefix_len] = prefix_ids[:]
+
+    #             if total_len - prefix_len - human_len2 > 0:
+    #                 if total_len > self.max_len:
+    #                     m_ids = self.sequence_labels_to_ids(self.max_len - prefix_len-human_len2, data['label'])
+    #                     masks[idx][prefix_len:self.max_len - human_len2] = m_ids[:]
+    #                 else:
+    #                     m_ids = self.sequence_labels_to_ids(total_len - prefix_len-human_len2, data['label'])
+    #                     masks[idx][prefix_len:total_len-human_len2] = m_ids[:]
+
+    #                 # 把导致问题的样本信息都打印出来
+    #                 if m_ids is None:
+    #                     # 把导致问题的样本信息都打印出来
+    #                     print(f"[Error] human_ids is None at idx={idx}")
+    #                     print(f"  text sample: {data['text']!r}")
+    #                     print(f"  label[idx]: {data['label']!r}")
+    #                     print(f"  prefix_len={prefix_len}, total_len={total_len}")
+    #                     # 也可以直接抛异常，结束并定位
+    #                     raise ValueError(f"sequence_labels_to_ids returned None at sample {idx}")
+
+    #             if total_len - prefix_len-machine_len > 0:
+    #                 if total_len > self.max_len:
+    #                     m_ids = self.sequence_labels_to_ids(self.max_len - prefix_len-machine_len, self.human_label)
+    #                 else:
+    #                     m_ids = self.sequence_labels_to_ids(total_len - prefix_len-machine_len, self.human_label)
+                    
+    #                 # 把导致问题的样本信息都打印出来
+    #                 if m_ids is None:
+    #                     # 把导致问题的样本信息都打印出来
+    #                     print(f"[Error] human_ids is None at idx={idx}")
+    #                     print(f"  text sample: {data['text']!r}")
+    #                     print(f"  label[idx]: {data['label']!r}")
+    #                     print(f"  prefix_len={prefix_len}, total_len={total_len}")
+    #                     # 也可以直接抛异常，结束并定位
+    #                     raise ValueError(f"sequence_labels_to_ids returned None at sample {idx}")
+
+    #                 masks[idx][prefix_len+machine_len:total_len] = m_ids[:]
+
+    #             masks[idx] += pad_masks[idx]
+
+    #         if data['prompt_pattern'] == "M_H_M":
+    #             human1 = lines_with_nl[:data['prompt_len'][0]]
+    #             human2 = lines_with_nl[data['prompt_len'][1]:]
+    #             machine_len = lines_with_nl[data['prompt_len'][0]:data['prompt_len'][1]]
+    #             # human_len1 = len("".join(human1))
+    #             # human_len2 = len("".join(human2))
+    #             # machine_len = len("".join(machine_len))
+    #             human_len1 = data['text'].find(data['machine_part'][0])+len(data['human_part'][-1])
+    #             human_len2 = len(data['text'])-data['text'].find(data['machine_part'][-1])
+    #             machine_len = data['text'].find(data['machine_part'][0]) + len(data['machine_part'][0]) - human_len1
+    #             machine_len = len(self.split_sentence(data['text'][human_len1:human_len1+machine_len]))
+    #             human_len2 = len(self.split_sentence(data['text'][human_len1+machine_len:]))
+
+    #             prefix_len = len(self.split_sentence(data['text'][:human_len1]))
+    #             if prefix_len > self.max_len:
+    #                 prefix_ids = self.sequence_labels_to_ids(self.max_len, data['label'])
+    #                 masks[idx][:] = prefix_ids[:]
+    #                 continue
+    #             total_len = len(self.split_sentence(data['text']))
+                
+    #             if prefix_len > 0:
+    #                 prefix_ids = self.sequence_labels_to_ids(prefix_len, data['label'])
+    #                 masks[idx][:prefix_len] = prefix_ids[:]
+
+    #             if total_len - prefix_len - human_len2 > 0:
+    #                 if total_len > self.max_len:
+    #                     m_ids = self.sequence_labels_to_ids(self.max_len - prefix_len-human_len2, self.human_label)
+    #                     masks[idx][prefix_len:self.max_len - human_len2] = m_ids[:]
+    #                 else:
+    #                     m_ids = self.sequence_labels_to_ids(total_len - prefix_len-human_len2, self.human_label)
+    #                     masks[idx][prefix_len:total_len - human_len2] = m_ids[:]
+
+    #                 # 把导致问题的样本信息都打印出来
+    #                 if m_ids is None:
+    #                     # 把导致问题的样本信息都打印出来
+    #                     print(f"[Error] human_ids is None at idx={idx}")
+    #                     print(f"  text sample: {data['text']!r}")
+    #                     print(f"  label[idx]: {data['label']!r}")
+    #                     print(f"  prefix_len={prefix_len}, total_len={total_len}")
+    #                     # 也可以直接抛异常，结束并定位
+    #                     raise ValueError(f"sequence_labels_to_ids returned None at sample {idx}")
+
+    #             if total_len - prefix_len-machine_len > 0:
+    #                 if total_len > self.max_len:
+    #                     m_ids = self.sequence_labels_to_ids(self.max_len - prefix_len-machine_len, data['label'])
+    #                 else:
+    #                     m_ids = self.sequence_labels_to_ids(total_len - prefix_len-machine_len, data['label'])
+                    
+    #                 # 把导致问题的样本信息都打印出来
+    #                 if m_ids is None:
+    #                     # 把导致问题的样本信息都打印出来
+    #                     print(f"[Error] human_ids is None at idx={idx}")
+    #                     print(f"  text sample: {data['text']!r}")
+    #                     print(f"  label[idx]: {data['label']!r}")
+    #                     print(f"  prefix_len={prefix_len}, total_len={total_len}")
+    #                     # 也可以直接抛异常，结束并定位
+    #                     raise ValueError(f"sequence_labels_to_ids returned None at sample {idx}")
+
+    #                 masks[idx][prefix_len+machine_len:total_len] = m_ids[:]
+
+    #             masks[idx] += pad_masks[idx]
+
+    #     batch['features'] = features
+    #     batch['labels'] = masks
+    #     batch['text'] = text
+
+    #     return batch
 
     
     def sequence_labels_to_ids(self, seq_len, label):
@@ -399,7 +655,6 @@ class DataManager:
         if use_sp:
             words = ["▁" if item == " " else item for item in words]
         return words
-
 
     def _split_cn_sentence(self, sentence, use_sp=False):
         words = list(sentence)
