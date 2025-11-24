@@ -21,6 +21,10 @@ import backend_model_info
 from dataloader import DataManager
 from model import ModelWiseCNNClassifier, ModelWiseTransformerClassifier, TransformerOnlyClassifier
 
+import ast
+import re
+from typing import List, Dict
+
 
 
 class SupervisedTrainer:
@@ -135,12 +139,16 @@ class SupervisedTrainer:
                 output = self.model(inputs['features'], inputs['labels'])
                 logits = output['logits']
                 preds = output['preds']
+                # print(f'preds: {preds.cpu().tolist()}')
+                # print(f'true_labels: {labels.cpu().tolist()}')
                 
+                # print(f'inputs: {type(inputs["text"])}') # list
                 texts.extend(inputs['text'])
                 pred_labels.extend(preds.cpu().tolist())
                 true_labels.extend(labels.cpu().tolist())
                 total_logits.extend(logits.cpu().tolist())
         
+        # print(f'type of texts[0]: {type(texts[0])}') # str
         # with open("", 'w') as f:
         #     f.write(json.dumps(total_logits[3], ensure_ascii=False) + '\n')
         #     f.write(json.dumps(texts[3], ensure_ascii=False) + '\n')
@@ -196,9 +204,52 @@ class SupervisedTrainer:
         """
         true_sent_labels = []
         pred_sent_labels = []
+        
         for text, true_label, pred_label in zip(texts, true_labels, pred_labels):
+            print('\n\n##############################################################')
+            print(text)
             true_sent_label = self.get_sent_label(text, true_label)
             pred_sent_label = self.get_sent_label(text, pred_label)
+
+            boundary_ix_real = []
+            boundary_ix = []
+            for idx, sent in enumerate(text.splitlines()):
+                if idx < len(true_sent_label) and idx < len(pred_sent_label):
+
+                    if(true_sent_label[idx] != pred_sent_label[idx]):
+                        # print('==========预测错误示例=================\n')
+                        # print(f'sent: {sent}')
+                        # print(f'true_label: {true_sent_label[idx]}')
+                        # print(f'pred_label: {pred_sent_label[idx]}')
+                        # print('\n')
+                        boundary_ix_real.append(idx)
+                    else:
+                        pass
+                        # print(f'sent: {sent}')
+                        # print(f'true_label: {true_sent_label[idx]}')
+                        # print(f'pred_label: {pred_sent_label[idx]}')
+                else:
+                    # print('==========list index out of range=================\n')
+                    # print(f'sent: {sent}')
+                    print('\n')
+            
+            if(len(boundary_ix_real)!=0):
+                current_group=[boundary_ix_real[0]]
+                for i in range(1, len(boundary_ix_real)):
+                    # 检查是否连续：当前元素 = 前一个元素 + 1
+                    if boundary_ix_real[i] == boundary_ix_real[i-1] + 1:
+                        current_group.append(boundary_ix_real[i])
+                    else:
+                        # 不连续时，保存当前分组的最大值
+                        boundary_ix.append(current_group[0])
+                        current_group = [boundary_ix_real[i]]  # 开始新分组
+                
+                # 处理最后一个分组
+                boundary_ix.append(current_group[0])
+
+                print(f'boundary_ix: {boundary_ix}')
+                print(f'len(boundary_ix): {len(boundary_ix)}')
+
             true_sent_labels.extend(true_sent_label)
             pred_sent_labels.extend(pred_sent_label)
         true_sent_labels_cleaned = []
@@ -219,8 +270,9 @@ class SupervisedTrainer:
         # print(f'----text-----\n{text}')
         # print(f'-----labels -----\n{label}')
         # 1. 按换行分行，保留空行
-        sents = text.splitlines()
-        #print(f'-----sents-----\n{sents}')
+        # sents = text.splitlines()
+        sents = self.split_code_into_blocks(text)
+        # print(f'-----sents-----\n{sents}')
 
         offset = 0
         sent_label = []
@@ -248,9 +300,12 @@ class SupervisedTrainer:
             # 4. 计算本行的 token 数量，以及本行在 label 列表中的起止索引
             word_num = len(split_sentence(text[start:end]))
             start_word_idx = end_word_idx - word_num
-            print(f'----start_word_idx----\n{start_word_idx}')
-            print(f'----end_word_idx----\n{end_word_idx}')
+            # print(f'----start_word_idx----\n{start_word_idx}')
+            # print(f'----end_word_idx----\n{end_word_idx}')
             tags = label[start_word_idx:end_word_idx]
+            if(tags==[]):
+                print('----empty tags----')
+                continue
 
             # 5. 选本行最常见的标签
             most_common_tag = self._get_most_common_tag(tags)
@@ -259,6 +314,114 @@ class SupervisedTrainer:
         if len(sent_label) == 0:
             print("empty sent label list")
         return sent_label
+    
+    def split_code_into_blocks(self, code: str) -> List[str]:
+        """
+        将代码分割成不同的逻辑块
+        
+        参数:
+            code: 要分割的代码字符串
+            
+        返回:
+            List[str]: 每个元素是一个代码块的字符串
+        """
+        blocks = []
+        
+        try:
+            # 使用AST解析代码
+            tree = ast.parse(code)
+            
+            # 处理顶级节点
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    # 函数定义块
+                    block_content = ast.get_source_segment(code, node)
+                    blocks.append(block_content)
+                elif isinstance(node, ast.ClassDef):
+                    # 类定义块
+                    block_content = ast.get_source_segment(code, node)
+                    blocks.append(block_content)
+                elif isinstance(node, (ast.If, ast.For, ast.While, ast.With, ast.Try)):
+                    # 控制流块
+                    block_content = ast.get_source_segment(code, node)
+                    blocks.append(block_content)
+                else:
+                    # 其他代码块（导入、赋值等）
+                    block_content = ast.get_source_segment(code, node)
+                    blocks.append(block_content)
+        
+        except SyntaxError:
+            # 如果AST解析失败，使用基于行的简单分割
+            blocks = self.split_code_by_lines(code)
+        
+        return blocks
+
+    def split_code_by_lines(self, code: str) -> List[str]:
+        """
+        使用基于行的简单方法分割代码
+        
+        参数:
+            code: 要分割的代码字符串
+            
+        返回:
+            List[str]: 每个元素是一个代码块的字符串
+        """
+        blocks = []
+        lines = code.split('\n')
+        current_block = []
+        
+        for line in lines:
+            stripped_line = line.strip()
+            
+            # 检测空行作为块分隔符
+            if not stripped_line and current_block:
+                blocks.append('\n'.join(current_block))
+                current_block = []
+                continue
+            
+            current_block.append(line)
+        
+        # 添加最后一个块
+        if current_block:
+            blocks.append('\n'.join(current_block))
+        
+        return blocks
+
+    
+    # def split_code_into_blocks(self, text):
+    #     """
+    #     将代码文本按照空行分割成块，并保留所有换行符
+        
+    #     参数:
+    #         text (str): 输入的代码文本
+            
+    #     返回:
+    #         list: 包含代码块的列表，每个块保留原始换行符
+    #     """
+    #     lines = text.splitlines(True)  # 保留换行符分割为行
+    #     blocks = []  # 存储所有代码块
+    #     current_block = []  # 当前正在处理的代码块
+        
+    #     for line in lines:
+    #         # 检查是否是空行（只包含空白字符和换行符）
+    #         if line.strip() == '':
+    #             # 如果当前块不为空，则将其加入blocks并重置
+    #             if current_block:
+    #                 blocks.append(''.join(current_block))
+    #                 current_block = []
+    #             # 空行本身也作为一个单独的块或保留在后续处理中
+    #             current_block.append(line)
+    #         else:
+    #             # 非空行，添加到当前块
+    #             current_block.append(line)
+        
+    #     # 添加最后一个块
+    #     if current_block:
+    #         blocks.append(''.join(current_block))
+        
+    #     return blocks
+
+   
 
     # def get_sent_label(self, text, label):
     #     import nltk
@@ -289,7 +452,7 @@ class SupervisedTrainer:
     def _get_most_common_tag(self, tags):
         """most_common_tag is a tuple: (tag, times)"""
         from collections import Counter
-        print(f'----tags----\n{tags}')
+        # print(f'----tags----\n{tags}') # block的时候，tag有空[]
         tags_cleaned = []
         for tag in tags:
             if tag==-1:
@@ -299,9 +462,9 @@ class SupervisedTrainer:
         tags = [self.id2label[tag] for tag in tags_cleaned]
         tags = [tag.split('-')[-1] for tag in tags]
         tag_counts = Counter(tags)
-        print(f'----tag counts----\n{tag_counts}')
+        # print(f'----tag counts----\n{tag_counts}')
         most_common_tag = tag_counts.most_common(1)[0]
-        print(f'----most common tag----\n{most_common_tag}')
+        # print(f'----most common tag----\n{most_common_tag}')
 
         return most_common_tag
 
@@ -379,8 +542,10 @@ def parse_args():
     parser.add_argument('--train_ratio', type=float, default=0.9)
     parser.add_argument('--split_dataset', action='store_true')
     parser.add_argument('--data_path', type=str, default='./code_data_hybrid')
-    parser.add_argument('--train_path', type=str, default='./code_data_hybrid/code_data_hybrid_train.jsonl')
-    parser.add_argument('--test_path', type=str, default='./code_data_hybrid/code_data_hybrid_test.jsonl')
+    # parser.add_argument('--train_path', type=str, default='./code_data_hybrid/code_data_hybrid_train.jsonl')
+    # parser.add_argument('--test_path', type=str, default='./code_data_hybrid/code_data_hybrid_test.jsonl')
+    parser.add_argument('--train_path', type=str, default='/data/wangmanyi/SeqXGPT/SeqXGPT/code_data_hybrid/code_data_hybrid_train.jsonl')
+    parser.add_argument('--test_path', type=str, default='/data/wangmanyi/SeqXGPT/SeqXGPT/code_data_hybrid/code_data_hybrid_test.jsonl')
 
     parser.add_argument('--num_train_epochs', type=int, default=20)
     parser.add_argument('--weight_decay', type=float, default=0.1)
@@ -436,7 +601,7 @@ if __name__ == "__main__":
             ckpt_name = ''
         else:
             classifier = ModelWiseTransformerClassifier(id2labels=id2label, seq_len=args.seq_len)
-            ckpt_name = 'model0620.ckpt'
+            ckpt_name = 'original_text_model.ckpt'
 
         trainer = SupervisedTrainer(data, classifier, en_labels, id2label, args)
 
